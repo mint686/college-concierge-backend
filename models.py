@@ -97,3 +97,11 @@ class SkillTransaction(Base):
     status = Column(String, default="pending")  # pending, completed, rejected
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class ClubMember(Base):
+    __tablename__ = "club_members"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    role = Column(String, default="member")  # 'lead', 'member'
+    joined_at = Column(DateTime, default=datetime.utcnow)

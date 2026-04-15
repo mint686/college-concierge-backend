@@ -9,6 +9,11 @@ from pydantic import BaseModel, EmailStr
 from database import get_db
 from models import User, Club, Task, Skill, Event, RSVP, SkillTransaction, AuditLog
 from auth import authenticate_user, create_access_token, get_password_hash, get_current_user, require_role, require_club_lead
+from database import engine
+from models import Base
+
+# Create tables if they don't exist
+Base.metadata.create_all(bind=engine)
 
 # ========== CREATE FASTAPI APP ==========
 app = FastAPI(title="College Concierge API")
@@ -132,12 +137,10 @@ class MemberResponse(BaseModel):
     email: str
     role: str
 
-
 # ========== BASIC ROUTE ==========
 @app.get("/")
 def root():
     return {"message": "College Concierge Backend Running"}
-
 
 # ========== AUTH ROUTES ==========
 @app.post("/auth/register", response_model=UserResponse)
@@ -177,7 +180,6 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
 def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
-
 # ========== NOTIFICATION TEST ROUTE ==========
 @app.post("/test/notification")
 def test_notification(notification: NotificationTest):
@@ -193,7 +195,6 @@ def test_notification(notification: NotificationTest):
         return {"success": True, "message_id": result}
     else:
         return {"success": False, "error": "Failed to send notification"}
-
 
 # ========== SKILL-SHARE ENDPOINTS ==========
 @app.get("/skills", response_model=List[SkillResponse])
@@ -363,7 +364,6 @@ def get_pending_requests(
     
     return result
 
-
 # ========== EVENTS ENDPOINTS ==========
 @app.get("/events", response_model=List[EventResponse])
 def get_events(
@@ -510,7 +510,6 @@ def get_my_events(
     
     return result
 
-
 # ========== CLUB ENDPOINTS ==========
 @app.get("/clubs", response_model=List[ClubResponse])
 def get_clubs(
@@ -561,6 +560,22 @@ def create_club(
         "created_at": new_club.created_at
     }
 
+@app.get("/clubs/list")
+def get_clubs_list(
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db)
+):
+    """Get list of all clubs for admin panel"""
+    clubs = db.query(Club).all()
+    return [
+        {
+            "id": c.id,
+            "name": c.name,
+            "lead_id": c.lead_id
+        }
+        for c in clubs
+    ]
+
 @app.get("/clubs/{club_id}/members", response_model=List[MemberResponse])
 def get_club_members(
     club_id: int,
@@ -596,6 +611,47 @@ def join_club(
     
     return {"message": f"Join request sent to {club.name}"}
 
+@app.post("/clubs/{club_id}/members")
+def add_club_member(
+    club_id: int,
+    email: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    club = db.query(Club).filter(Club.id == club_id).first()
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found")
+    
+    if club.lead_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only club lead can add members")
+    
+    user_to_add = db.query(User).filter(User.email == email).first()
+    if not user_to_add:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {"success": True, "message": f"Member {email} added to club {club.name}"}
+
+@app.get("/clubs/{club_id}/members")
+def get_club_members_list(
+    club_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    club = db.query(Club).filter(Club.id == club_id).first()
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found")
+    
+    lead = db.query(User).filter(User.id == club.lead_id).first()
+    members = []
+    if lead:
+        members.append({
+            "id": lead.id,
+            "name": lead.name,
+            "email": lead.email,
+            "role": "lead"
+        })
+    
+    return members
 
 # ========== TASK ENDPOINTS ==========
 @app.get("/tasks", response_model=List[TaskResponse])
@@ -618,43 +674,6 @@ def get_my_tasks(
             "status": task.status,
             "club_id": task.club_id,
             "club_name": club.name if club else "Unknown",
-            "assigned_to": task.assigned_to,
-            "assigned_to_name": assigned_to_user.name if assigned_to_user else "Unknown",
-            "assigned_by": task.assigned_by,
-            "assigned_by_name": assigned_by_user.name if assigned_by_user else "Unknown",
-            "deadline": task.deadline,
-            "created_at": task.created_at
-        })
-    
-    return result
-
-@app.get("/tasks/club/{club_id}", response_model=List[TaskResponse])
-def get_club_tasks(
-    club_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    club = db.query(Club).filter(Club.id == club_id).first()
-    if not club:
-        raise HTTPException(status_code=404, detail="Club not found")
-    
-    if club.lead_id != current_user.id and current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only club lead can view all club tasks")
-    
-    tasks = db.query(Task).filter(Task.club_id == club_id).all()
-    
-    result = []
-    for task in tasks:
-        assigned_to_user = db.query(User).filter(User.id == task.assigned_to).first()
-        assigned_by_user = db.query(User).filter(User.id == task.assigned_by).first()
-        
-        result.append({
-            "id": task.id,
-            "title": task.title,
-            "description": task.description,
-            "status": task.status,
-            "club_id": task.club_id,
-            "club_name": club.name,
             "assigned_to": task.assigned_to,
             "assigned_to_name": assigned_to_user.name if assigned_to_user else "Unknown",
             "assigned_by": task.assigned_by,
@@ -771,7 +790,6 @@ def get_pending_tasks_count(
     return {"pending_count": count}
 
 # ========== ADMIN ENDPOINTS ==========
-
 @app.get("/admin/users")
 def get_all_users(
     current_user: User = Depends(require_role("admin")),
@@ -794,6 +812,7 @@ def get_all_users(
 def update_user_role(
     user_id: int,
     new_role: str,
+    club_id: Optional[int] = None,
     current_user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db)
 ):
@@ -806,15 +825,30 @@ def update_user_role(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
+    # Don't allow changing your own role
+    if user.id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot change your own role")
+    
     old_role = user.role
     user.role = new_role
+    
+    # If making user a club lead, associate with a club
+    if new_role == "club_lead" and club_id:
+        club = db.query(Club).filter(Club.id == club_id).first()
+        if not club:
+            raise HTTPException(status_code=404, detail="Club not found")
+        
+        # Update club's lead_id
+        club.lead_id = user_id
+    
     db.commit()
     
     return {
         "message": f"User {user.name} role changed from {old_role} to {new_role}",
         "user_id": user.id,
         "email": user.email,
-        "new_role": user.role
+        "new_role": user.role,
+        "club_id": club_id if new_role == "club_lead" else None
     }
 
 @app.delete("/admin/users/{user_id}")
@@ -836,103 +870,3 @@ def delete_user(
     db.commit()
     
     return {"message": f"User {user.email} deleted successfully"}
-
-# ========== ADMIN ENDPOINTS ==========
-
-@app.get("/admin/users")
-def get_all_users(
-    current_user: User = Depends(require_role("admin")),
-    db: Session = Depends(get_db)
-):
-    """Get all users (Admin only)"""
-    users = db.query(User).all()
-    return [
-        {
-            "id": u.id,
-            "email": u.email,
-            "name": u.name,
-            "role": u.role,
-            "points": u.points
-        }
-        for u in users
-    ]
-
-@app.put("/admin/users/{user_id}/role")
-def update_user_role(
-    user_id: int,
-    new_role: str,
-    current_user: User = Depends(require_role("admin")),
-    db: Session = Depends(get_db)
-):
-    """Update a user's role (Admin only)"""
-    
-    if new_role not in ["student", "club_lead", "admin"]:
-        raise HTTPException(status_code=400, detail="Invalid role")
-    
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    old_role = user.role
-    user.role = new_role
-    db.commit()
-    
-    return {
-        "message": f"User {user.name} role changed from {old_role} to {new_role}",
-        "user_id": user.id,
-        "email": user.email,
-        "new_role": user.role
-    }
-
-# ========== CLUB MEMBER MANAGEMENT ==========
-
-@app.post("/clubs/{club_id}/members")
-def add_club_member(
-    club_id: int,
-    email: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Add a member to a club (Club Lead only)"""
-    
-    club = db.query(Club).filter(Club.id == club_id).first()
-    if not club:
-        raise HTTPException(status_code=404, detail="Club not found")
-    
-    # Check if user is club lead
-    if club.lead_id != current_user.id and current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only club lead can add members")
-    
-    user_to_add = db.query(User).filter(User.email == email).first()
-    if not user_to_add:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # You can implement ClubMember table here
-    # For now, just return success
-    
-    return {"success": True, "message": f"Member {email} added to club {club.name}"}
-
-@app.get("/clubs/{club_id}/members")
-def get_club_members_list(
-    club_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all members of a club"""
-    
-    club = db.query(Club).filter(Club.id == club_id).first()
-    if not club:
-        raise HTTPException(status_code=404, detail="Club not found")
-    
-    # For now, return club lead
-    lead = db.query(User).filter(User.id == club.lead_id).first()
-    members = []
-    if lead:
-        members.append({
-            "id": lead.id,
-            "name": lead.name,
-            "email": lead.email,
-            "role": "lead"
-        })
-    
-    return members
