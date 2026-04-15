@@ -24,7 +24,7 @@ class Club(Base):
     description = Column(Text, nullable=True)
     lead_id = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+
 class Task(Base):
     __tablename__ = "tasks"
     
@@ -37,6 +37,7 @@ class Task(Base):
     assigned_by = Column(Integer, ForeignKey("users.id"))
     deadline = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
+
 
 class Skill(Base):
     __tablename__ = "skills"
@@ -71,6 +72,7 @@ class RSVP(Base):
     status = Column(String, default="going")  # going, not_going, maybe
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     
@@ -94,3 +96,4 @@ class SkillTransaction(Base):
     points = Column(Integer)
     status = Column(String, default="pending")  # pending, completed, rejected
     created_at = Column(DateTime, default=datetime.utcnow)
+
