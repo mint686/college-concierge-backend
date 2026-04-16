@@ -2,6 +2,8 @@ from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, J
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
+from sqlalchemy import Table, Column, Integer, String, ForeignKey, DateTime, Text, Boolean, JSON
+from sqlalchemy.orm import relationship
 
 class User(Base):
     __tablename__ = "users"
@@ -105,3 +107,54 @@ class ClubMember(Base):
     user_id = Column(Integer, ForeignKey("users.id"))
     role = Column(String, default="member")  # 'lead', 'member'
     joined_at = Column(DateTime, default=datetime.utcnow)
+
+class SkillCategory(Base):
+    __tablename__ = "skill_categories"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+    icon = Column(String, nullable=True)
+
+# Skill Tags (many-to-many)
+skill_tags = Table(
+    'skill_tags',
+    Base.metadata,
+    Column('skill_id', Integer, ForeignKey('skills.id')),
+    Column('tag_id', Integer, ForeignKey('tags.id'))
+)
+
+class Tag(Base):
+    __tablename__ = "tags"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+
+# Club Members (for adding members)
+class ClubMember(Base):
+    __tablename__ = "club_members"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    role = Column(String, default="member")  # 'member', 'lead'
+    joined_at = Column(DateTime, default=datetime.utcnow)
+
+# Task Comments
+class TaskComment(Base):
+    __tablename__ = "task_comments"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    comment = Column(Text, nullable=False)
+    attachment_url = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+# Event Reminders
+class EventReminder(Base):
+    __tablename__ = "event_reminders"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(Integer, ForeignKey("events.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    reminder_time = Column(DateTime)
