@@ -7,7 +7,7 @@ from typing import Optional, List
 from pydantic import BaseModel, EmailStr
 
 from database import get_db
-from models import User, Club, Task, Skill, Event, RSVP, SkillTransaction, AuditLog
+from models import User, Club, Task, Skill, Event, RSVP, SkillTransaction, AuditLog, ClubMember, SkillCategory, TaskComment
 from auth import authenticate_user, create_access_token, get_password_hash, get_current_user, require_role, require_club_lead
 from database import engine
 from models import Base
@@ -440,19 +440,7 @@ def create_event(
     db.commit()
     db.refresh(new_event)
     
-    return {
-        "id": new_event.id,
-        "title": new_event.title,
-        "description": new_event.description,
-        "venue": new_event.venue,
-        "event_date": new_event.event_date,
-        "club_id": new_event.club_id,
-        "club_name": None,
-        "created_by": new_event.created_by,
-        "organizer_name": current_user.name,
-        "rsvp_count": 0,
-        "user_rsvp_status": None
-    }
+    return new_event
 
 @app.post("/events/{event_id}/rsvp")
 def rsvp_event(
@@ -509,6 +497,27 @@ def get_my_events(
         })
     
     return result
+
+@app.get("/events/calendar/{year}/{month}")
+def get_calendar_events(
+    year: int,
+    month: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get events for calendar view"""
+    start_date = datetime(year, month, 1)
+    if month == 12:
+        end_date = datetime(year + 1, 1, 1)
+    else:
+        end_date = datetime(year, month + 1, 1)
+    
+    events = db.query(Event).filter(
+        Event.event_date >= start_date,
+        Event.event_date < end_date
+    ).all()
+    
+    return events
 
 # ========== CLUB ENDPOINTS ==========
 @app.get("/clubs", response_model=List[ClubResponse])
@@ -576,29 +585,6 @@ def get_clubs_list(
         for c in clubs
     ]
 
-@app.get("/clubs/{club_id}/members", response_model=List[MemberResponse])
-def get_club_members(
-    club_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    club = db.query(Club).filter(Club.id == club_id).first()
-    if not club:
-        raise HTTPException(status_code=404, detail="Club not found")
-    
-    members = []
-    
-    lead = db.query(User).filter(User.id == club.lead_id).first()
-    if lead:
-        members.append({
-            "id": lead.id,
-            "name": lead.name,
-            "email": lead.email,
-            "role": "lead"
-        })
-    
-    return members
-
 @app.post("/clubs/{club_id}/join")
 def join_club(
     club_id: int,
@@ -611,13 +597,14 @@ def join_club(
     
     return {"message": f"Join request sent to {club.name}"}
 
-@app.post("/clubs/{club_id}/members")
+@app.post("/clubs/{club_id}/members/add")
 def add_club_member(
     club_id: int,
     email: str,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Add a member to club (Club Lead only)"""
     club = db.query(Club).filter(Club.id == club_id).first()
     if not club:
         raise HTTPException(status_code=404, detail="Club not found")
@@ -629,29 +616,63 @@ def add_club_member(
     if not user_to_add:
         raise HTTPException(status_code=404, detail="User not found")
     
-    return {"success": True, "message": f"Member {email} added to club {club.name}"}
+    # Check if already a member
+    existing = db.query(ClubMember).filter(
+        ClubMember.club_id == club_id,
+        ClubMember.user_id == user_to_add.id
+    ).first()
+    
+    if existing:
+        raise HTTPException(status_code=400, detail="User already a member")
+    
+    new_member = ClubMember(
+        club_id=club_id,
+        user_id=user_to_add.id,
+        role="member"
+    )
+    
+    db.add(new_member)
+    db.commit()
+    
+    return {"message": f"{user_to_add.name} added to {club.name}"}
 
-@app.get("/clubs/{club_id}/members")
+@app.get("/clubs/{club_id}/members/list")
 def get_club_members_list(
     club_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Get all members of a club"""
     club = db.query(Club).filter(Club.id == club_id).first()
     if not club:
         raise HTTPException(status_code=404, detail="Club not found")
     
+    members = db.query(ClubMember).filter(ClubMember.club_id == club_id).all()
+    result = []
+    
+    for member in members:
+        user = db.query(User).filter(User.id == member.user_id).first()
+        if user:
+            result.append({
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "role": member.role,
+                "joined_at": member.joined_at
+            })
+    
+    # Add club lead
     lead = db.query(User).filter(User.id == club.lead_id).first()
-    members = []
     if lead:
-        members.append({
+        result.insert(0, {
             "id": lead.id,
             "name": lead.name,
             "email": lead.email,
-            "role": "lead"
+            "role": "lead",
+            "joined_at": club.created_at
         })
     
-    return members
+    return result
 
 # ========== TASK ENDPOINTS ==========
 @app.get("/tasks", response_model=List[TaskResponse])
@@ -714,14 +735,6 @@ def create_task(
     db.add(new_task)
     db.commit()
     db.refresh(new_task)
-    
-    if assigned_user.device_token:
-        from notification_service import send_push_notification
-        send_push_notification(
-            device_token=assigned_user.device_token,
-            title="New Task Assigned",
-            body=f'You have been assigned a new task: "{new_task.title}" in {club.name}'
-        )
     
     return {
         "id": new_task.id,
@@ -788,6 +801,113 @@ def get_pending_tasks_count(
     ).count()
     
     return {"pending_count": count}
+
+@app.post("/tasks/{task_id}/comments")
+def add_task_comment(
+    task_id: int,
+    comment: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Add comment to a task"""
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    new_comment = TaskComment(
+        task_id=task_id,
+        user_id=current_user.id,
+        comment=comment
+    )
+    
+    db.add(new_comment)
+    db.commit()
+    db.refresh(new_comment)
+    
+    return new_comment
+
+@app.get("/tasks/{task_id}/comments")
+def get_task_comments(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all comments for a task"""
+    comments = db.query(TaskComment).filter(TaskComment.task_id == task_id).all()
+    result = []
+    for comment in comments:
+        user = db.query(User).filter(User.id == comment.user_id).first()
+        result.append({
+            "id": comment.id,
+            "comment": comment.comment,
+            "user_name": user.name if user else "Unknown",
+            "created_at": comment.created_at,
+            "attachment_url": comment.attachment_url
+        })
+    
+    return result
+
+# ========== USER CLUBS ENDPOINT ==========
+@app.get("/users/my-clubs")
+def get_my_clubs(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get clubs where user is a member"""
+    # Clubs where user is lead
+    lead_clubs = db.query(Club).filter(Club.lead_id == current_user.id).all()
+    
+    # Clubs where user is member
+    memberships = db.query(ClubMember).filter(ClubMember.user_id == current_user.id).all()
+    member_clubs = []
+    for membership in memberships:
+        club = db.query(Club).filter(Club.id == membership.club_id).first()
+        if club:
+            member_clubs.append({
+                "id": club.id,
+                "name": club.name,
+                "role": membership.role,
+                "joined_at": membership.joined_at
+            })
+    
+    return {
+        "lead_clubs": [{"id": c.id, "name": c.name} for c in lead_clubs],
+        "member_clubs": member_clubs
+    }
+
+# ========== SKILL CATEGORIES & SEARCH ==========
+@app.get("/skill-categories")
+def get_skill_categories(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all skill categories"""
+    categories = db.query(SkillCategory).all()
+    return [{"id": c.id, "name": c.name, "icon": c.icon} for c in categories]
+
+@app.get("/skills/search")
+def search_skills(
+    q: Optional[str] = None,
+    category: Optional[str] = None,
+    tag: Optional[str] = None,
+    skill_type: Optional[str] = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Search skills with filters"""
+    query = db.query(Skill).filter(Skill.status == "active")
+    
+    if q:
+        query = query.filter(
+            (Skill.title.ilike(f"%{q}%")) | 
+            (Skill.description.ilike(f"%{q}%"))
+        )
+    
+    if skill_type:
+        query = query.filter(Skill.skill_type == skill_type)
+    
+    skills = query.all()
+    return skills
 
 # ========== ADMIN ENDPOINTS ==========
 @app.get("/admin/users")
@@ -891,235 +1011,3 @@ def delete_club(
     db.commit()
     
     return {"message": f"Club '{club.name}' deleted successfully"}
-
-@app.post("/events")
-def create_event(
-    event_data: EventCreate,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    # Check if user is club lead if event is for a club
-    if event_data.club_id:
-        club = db.query(Club).filter(Club.id == event_data.club_id).first()
-        if not club:
-            raise HTTPException(status_code=404, detail="Club not found")
-        if club.lead_id != current_user.id and current_user.role != "admin":
-            raise HTTPException(status_code=403, detail="Only club lead can create club events")
-    
-    new_event = Event(
-        title=event_data.title,
-        description=event_data.description,
-        venue=event_data.venue,
-        event_date=event_data.event_date,
-        club_id=event_data.club_id,
-        created_by=current_user.id
-    )
-    
-    db.add(new_event)
-    db.commit()
-    db.refresh(new_event)
-    
-    return new_event
-
-@app.get("/events/calendar/{year}/{month}")
-def get_calendar_events(
-    year: int,
-    month: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get events for calendar view"""
-    start_date = datetime(year, month, 1)
-    if month == 12:
-        end_date = datetime(year + 1, 1, 1)
-    else:
-        end_date = datetime(year, month + 1, 1)
-    
-    events = db.query(Event).filter(
-        Event.event_date >= start_date,
-        Event.event_date < end_date
-    ).all()
-    
-    return events
-
-@app.post("/clubs/{club_id}/members/add")
-def add_club_member(
-    club_id: int,
-    email: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Add a member to club (Club Lead only)"""
-    club = db.query(Club).filter(Club.id == club_id).first()
-    if not club:
-        raise HTTPException(status_code=404, detail="Club not found")
-    
-    if club.lead_id != current_user.id and current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Only club lead can add members")
-    
-    user_to_add = db.query(User).filter(User.email == email).first()
-    if not user_to_add:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Check if already a member
-    existing = db.query(ClubMember).filter(
-        ClubMember.club_id == club_id,
-        ClubMember.user_id == user_to_add.id
-    ).first()
-    
-    if existing:
-        raise HTTPException(status_code=400, detail="User already a member")
-    
-    new_member = ClubMember(
-        club_id=club_id,
-        user_id=user_to_add.id,
-        role="member"
-    )
-    
-    db.add(new_member)
-    db.commit()
-    
-    return {"message": f"{user_to_add.name} added to {club.name}"}
-
-@app.get("/clubs/{club_id}/members/list")
-def get_club_members_list(
-    club_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all members of a club"""
-    club = db.query(Club).filter(Club.id == club_id).first()
-    if not club:
-        raise HTTPException(status_code=404, detail="Club not found")
-    
-    members = db.query(ClubMember).filter(ClubMember.club_id == club_id).all()
-    result = []
-    
-    for member in members:
-        user = db.query(User).filter(User.id == member.user_id).first()
-        if user:
-            result.append({
-                "id": user.id,
-                "name": user.name,
-                "email": user.email,
-                "role": member.role,
-                "joined_at": member.joined_at
-            })
-    
-    # Add club lead
-    lead = db.query(User).filter(User.id == club.lead_id).first()
-    if lead:
-        result.insert(0, {
-            "id": lead.id,
-            "name": lead.name,
-            "email": lead.email,
-            "role": "lead",
-            "joined_at": club.created_at
-        })
-    
-    return result
-
-@app.get("/users/my-clubs")
-def get_my_clubs(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get clubs where user is a member"""
-    # Clubs where user is lead
-    lead_clubs = db.query(Club).filter(Club.lead_id == current_user.id).all()
-    
-    # Clubs where user is member
-    memberships = db.query(ClubMember).filter(ClubMember.user_id == current_user.id).all()
-    member_clubs = []
-    for membership in memberships:
-        club = db.query(Club).filter(Club.id == membership.club_id).first()
-        if club:
-            member_clubs.append({
-                "id": club.id,
-                "name": club.name,
-                "role": membership.role,
-                "joined_at": membership.joined_at
-            })
-    
-    return {
-        "lead_clubs": [{"id": c.id, "name": c.name} for c in lead_clubs],
-        "member_clubs": member_clubs
-    }
-
-@app.get("/skill-categories")
-def get_skill_categories(
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all skill categories"""
-    categories = db.query(SkillCategory).all()
-    return [{"id": c.id, "name": c.name, "icon": c.icon} for c in categories]
-
-@app.get("/skills/search")
-def search_skills(
-    q: Optional[str] = None,
-    category: Optional[str] = None,
-    tag: Optional[str] = None,
-    skill_type: Optional[str] = None,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Search skills with filters"""
-    query = db.query(Skill).filter(Skill.status == "active")
-    
-    if q:
-        query = query.filter(
-            (Skill.title.ilike(f"%{q}%")) | 
-            (Skill.description.ilike(f"%{q}%"))
-        )
-    
-    if skill_type:
-        query = query.filter(Skill.skill_type == skill_type)
-    
-    skills = query.all()
-    return skills
-@app.post("/tasks/{task_id}/comments")
-def add_task_comment(
-    task_id: int,
-    comment: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Add comment to a task"""
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    
-    new_comment = TaskComment(
-        task_id=task_id,
-        user_id=current_user.id,
-        comment=comment
-    )
-    
-    db.add(new_comment)
-    db.commit()
-    db.refresh(new_comment)
-    
-    return new_comment
-
-@app.get("/tasks/{task_id}/comments")
-def get_task_comments(
-    task_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all comments for a task"""
-    comments = db.query(TaskComment).filter(TaskComment.task_id == task_id).all()
-    result = []
-    for comment in comments:
-        user = db.query(User).filter(User.id == comment.user_id).first()
-        result.append({
-            "id": comment.id,
-            "comment": comment.comment,
-            "user_name": user.name if user else "Unknown",
-            "created_at": comment.created_at,
-            "attachment_url": comment.attachment_url
-        })
-    
-    return result
-
