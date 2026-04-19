@@ -597,6 +597,7 @@ def join_club(
     
     return {"message": f"Join request sent to {club.name}"}
 
+# ========== CLUB MEMBER MANAGEMENT ==========
 @app.post("/clubs/{club_id}/members/add")
 def add_club_member(
     club_id: int,
@@ -605,6 +606,7 @@ def add_club_member(
     db: Session = Depends(get_db)
 ):
     """Add a member to club (Club Lead only)"""
+    
     club = db.query(Club).filter(Club.id == club_id).first()
     if not club:
         raise HTTPException(status_code=404, detail="Club not found")
@@ -616,7 +618,6 @@ def add_club_member(
     if not user_to_add:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Check if already a member
     existing = db.query(ClubMember).filter(
         ClubMember.club_id == club_id,
         ClubMember.user_id == user_to_add.id
@@ -634,20 +635,25 @@ def add_club_member(
     db.add(new_member)
     db.commit()
     
-    return {"message": f"{user_to_add.name} added to {club.name}"}
+    return {"message": f"{user_to_add.name} added to {club.name}", "user_id": user_to_add.id, "user_name": user_to_add.name}
 
-@app.get("/clubs/{club_id}/members/list")
-def get_club_members_list(
+@app.get("/clubs/{club_id}/members")
+def get_club_members(
     club_id: int,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get all members of a club"""
+    """Get all members of a club (Club Lead only)"""
+    
     club = db.query(Club).filter(Club.id == club_id).first()
     if not club:
         raise HTTPException(status_code=404, detail="Club not found")
     
+    if club.lead_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only club lead can view members")
+    
     members = db.query(ClubMember).filter(ClubMember.club_id == club_id).all()
+    
     result = []
     
     for member in members:
@@ -661,18 +667,45 @@ def get_club_members_list(
                 "joined_at": member.joined_at
             })
     
-    # Add club lead
     lead = db.query(User).filter(User.id == club.lead_id).first()
     if lead:
-        result.insert(0, {
-            "id": lead.id,
-            "name": lead.name,
-            "email": lead.email,
-            "role": "lead",
-            "joined_at": club.created_at
-        })
+        lead_already_included = any(m.get('id') == lead.id for m in result)
+        if not lead_already_included:
+            result.insert(0, {
+                "id": lead.id,
+                "name": lead.name,
+                "email": lead.email,
+                "role": "lead",
+                "joined_at": club.created_at
+            })
     
     return result
+
+@app.get("/clubs/my")
+def get_my_clubs(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get clubs where user is lead or member"""
+    
+    lead_clubs = db.query(Club).filter(Club.lead_id == current_user.id).all()
+    
+    memberships = db.query(ClubMember).filter(ClubMember.user_id == current_user.id).all()
+    member_clubs = []
+    for membership in memberships:
+        club = db.query(Club).filter(Club.id == membership.club_id).first()
+        if club:
+            member_clubs.append({
+                "id": club.id,
+                "name": club.name,
+                "description": club.description,
+                "created_at": club.created_at
+            })
+    
+    return {
+        "lead_clubs": [{"id": c.id, "name": c.name, "description": c.description, "created_at": c.created_at} for c in lead_clubs],
+        "member_clubs": member_clubs
+    }
 
 # ========== TASK ENDPOINTS ==========
 @app.get("/tasks", response_model=List[TaskResponse])
@@ -802,6 +835,64 @@ def get_pending_tasks_count(
     
     return {"pending_count": count}
 
+@app.delete("/tasks/{task_id}")
+def delete_task(
+    task_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a task (only if status is 'pending')"""
+    
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    club = db.query(Club).filter(Club.id == task.club_id).first()
+    is_authorized = (club and club.lead_id == current_user.id) or (current_user.role == "admin")
+    
+    if not is_authorized:
+        raise HTTPException(status_code=403, detail="Only club lead can delete tasks")
+    
+    if task.status != "pending":
+        raise HTTPException(status_code=400, detail="Cannot delete task that is in progress or completed")
+    
+    db.delete(task)
+    db.commit()
+    
+    return {"message": "Task deleted successfully"}
+
+@app.put("/tasks/{task_id}")
+def update_task(
+    task_id: int,
+    task_data: TaskCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update a task (only if status is 'pending')"""
+    
+    task = db.query(Task).filter(Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    club = db.query(Club).filter(Club.id == task.club_id).first()
+    is_authorized = (club and club.lead_id == current_user.id) or (current_user.role == "admin")
+    
+    if not is_authorized:
+        raise HTTPException(status_code=403, detail="Only club lead can edit tasks")
+    
+    if task.status != "pending":
+        raise HTTPException(status_code=400, detail="Cannot edit task that is in progress or completed")
+    
+    task.title = task_data.title
+    task.description = task_data.description
+    task.assigned_to = task_data.assigned_to
+    task.deadline = task_data.deadline
+    
+    db.commit()
+    db.refresh(task)
+    
+    return task
+
 @app.post("/tasks/{task_id}/comments")
 def add_task_comment(
     task_id: int,
@@ -854,10 +945,8 @@ def get_my_clubs(
     db: Session = Depends(get_db)
 ):
     """Get clubs where user is a member"""
-    # Clubs where user is lead
     lead_clubs = db.query(Club).filter(Club.lead_id == current_user.id).all()
     
-    # Clubs where user is member
     memberships = db.query(ClubMember).filter(ClubMember.user_id == current_user.id).all()
     member_clubs = []
     for membership in memberships:
@@ -945,20 +1034,16 @@ def update_user_role(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Don't allow changing your own role
     if user.id == current_user.id:
         raise HTTPException(status_code=400, detail="Cannot change your own role")
     
     old_role = user.role
     user.role = new_role
     
-    # If making user a club lead, associate with a club
     if new_role == "club_lead" and club_id:
         club = db.query(Club).filter(Club.id == club_id).first()
         if not club:
             raise HTTPException(status_code=404, detail="Club not found")
-        
-        # Update club's lead_id
         club.lead_id = user_id
     
     db.commit()
@@ -1002,7 +1087,6 @@ def delete_club(
     if not club:
         raise HTTPException(status_code=404, detail="Club not found")
     
-    # Delete related data
     db.query(Task).filter(Task.club_id == club_id).delete()
     db.query(Event).filter(Event.club_id == club_id).delete()
     db.query(ClubMember).filter(ClubMember.club_id == club_id).delete()
