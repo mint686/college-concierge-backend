@@ -681,6 +681,51 @@ def get_club_members(
     
     return result
 
+@app.get("/clubs/{club_id}/members/assignable")
+def get_assignable_members(
+    club_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get club members available for task assignment (Club Lead or Admin only)"""
+    
+    club = db.query(Club).filter(Club.id == club_id).first()
+    if not club:
+        raise HTTPException(status_code=404, detail="Club not found")
+    
+    # Only club lead or admin can assign tasks
+    if club.lead_id != current_user.id and current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Only club lead can assign tasks")
+    
+    # Get all club members
+    members = db.query(ClubMember).filter(ClubMember.club_id == club_id).all()
+    
+    result = []
+    
+    # Add all members
+    for member in members:
+        user = db.query(User).filter(User.id == member.user_id).first()
+        if user:
+            result.append({
+                "id": user.id,
+                "name": user.name,
+                "email": user.email
+            })
+    
+    # Add club lead
+    lead = db.query(User).filter(User.id == club.lead_id).first()
+    if lead:
+        # Check if lead is already in the list
+        lead_already_included = any(m.get('id') == lead.id for m in result)
+        if not lead_already_included:
+            result.insert(0, {
+                "id": lead.id,
+                "name": lead.name,
+                "email": lead.email
+            })
+    
+    return result
+
 @app.get("/clubs/my")
 def get_my_clubs(
     current_user: User = Depends(get_current_user),
@@ -754,6 +799,16 @@ def create_task(
     assigned_user = db.query(User).filter(User.id == task_data.assigned_to).first()
     if not assigned_user:
         raise HTTPException(status_code=404, detail="Assigned user not found")
+    
+    # Check if assigned user is a member of the club (or is the club lead)
+    if assigned_user.id != club.lead_id:
+        is_member = db.query(ClubMember).filter(
+            ClubMember.club_id == task_data.club_id,
+            ClubMember.user_id == assigned_user.id
+        ).first()
+        
+        if not is_member:
+            raise HTTPException(status_code=400, detail="Assigned user is not a member of this club")
     
     new_task = Task(
         title=task_data.title,
