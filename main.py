@@ -639,6 +639,8 @@ def add_club_member(
     new_member = ClubMember(
         club_id=club_id,
         user_id=user_to_add.id,
+        name=user_to_add.name,  # Store name directly
+        email=user_to_add.email,  # Store email directly
         role="member"
     )
     
@@ -667,15 +669,13 @@ def get_club_members(
     result = []
     
     for member in members:
-        user = db.query(User).filter(User.id == member.user_id).first()
-        if user:
-            result.append({
-                "id": user.id,
-                "name": user.name,
-                "email": user.email,
-                "role": member.role,
-                "joined_at": member.joined_at
-            })
+        result.append({
+            "id": member.user_id,  # Use stored user_id
+            "name": member.name,   # Use stored name
+            "email": member.email, # Use stored email
+            "role": member.role,
+            "joined_at": member.joined_at
+        })
     
     lead = db.query(User).filter(User.id == club.lead_id).first()
     if lead:
@@ -714,13 +714,11 @@ def get_assignable_members(
     
     # Add all members
     for member in members:
-        user = db.query(User).filter(User.id == member.user_id).first()
-        if user:
-            result.append({
-                "id": user.id,
-                "name": user.name,
-                "email": user.email
-            })
+        result.append({
+            "id": member.user_id,
+            "name": member.name,   # Use stored name
+            "email": member.email  # Use stored email
+        })
     
     # Add club lead
     lead = db.query(User).filter(User.id == club.lead_id).first()
@@ -753,8 +751,8 @@ def get_my_clubs(
             member_clubs.append({
                 "id": club.id,
                 "name": club.name,
-                "description": club.description,
-                "created_at": club.created_at
+                "role": membership.role,
+                "joined_at": membership.joined_at
             })
     
     return {
@@ -996,7 +994,7 @@ def get_task_comments(
         result.append({
             "id": comment.id,
             "comment": comment.comment,
-            "user_name": user.name if user else "Unknown",
+            "name": user.name if user else "Unknown",
             "created_at": comment.created_at,
             "attachment_url": comment.attachment_url
         })
@@ -1136,6 +1134,16 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
+    # Remove user from all club memberships
+    db.query(ClubMember).filter(ClubMember.user_id == user_id).delete()
+
+    # Handle clubs where user is lead
+    lead_clubs = db.query(Club).filter(Club.lead_id == user_id).all()
+    for club in lead_clubs:
+        # You might want to assign a new lead or handle this differently
+        # For now, we'll just remove the lead_id
+        club.lead_id = None
+
     db.delete(user)
     db.commit()
     

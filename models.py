@@ -111,6 +111,8 @@ class ClubMember(Base):
     id = Column(Integer, primary_key=True, index=True)
     club_id = Column(Integer, ForeignKey("clubs.id"))
     user_id = Column(Integer, ForeignKey("users.id"))
+    name = Column(String, nullable=False)  # Store name directly for faster queries
+    email = Column(String, nullable=False)  # Store email directly for convenience
     role = Column(String, default="member")
     joined_at = Column(DateTime, default=datetime.utcnow)
 
