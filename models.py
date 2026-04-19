@@ -1,17 +1,17 @@
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, JSON, Text
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, JSON, Text, Table
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from database import Base
-from sqlalchemy import Table, Column, Integer, String, ForeignKey, DateTime, Text, Boolean, JSON
-from sqlalchemy.orm import relationship
 
+# Add extend_existing to all tables to prevent redefinition errors
 class User(Base):
     __tablename__ = "users"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String, nullable=False)
-    password = Column(String, nullable=False)  # ← MAKE SURE THIS LINE EXISTS
+    password = Column(String, nullable=False)
     role = Column(String, default="student")
     points = Column(Integer, default=0)
     college_verified = Column(Boolean, default=False)
@@ -20,6 +20,7 @@ class User(Base):
 
 class Club(Base):
     __tablename__ = "clubs"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)
@@ -29,32 +30,34 @@ class Club(Base):
 
 class Task(Base):
     __tablename__ = "tasks"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
     description = Column(Text)
-    status = Column(String, default="pending")  # pending, in_progress, completed
+    status = Column(String, default="pending")
     club_id = Column(Integer, ForeignKey("clubs.id"))
     assigned_to = Column(Integer, ForeignKey("users.id"))
     assigned_by = Column(Integer, ForeignKey("users.id"))
     deadline = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-
 class Skill(Base):
     __tablename__ = "skills"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
     description = Column(Text)
-    skill_type = Column(String)  # offering, seeking
+    skill_type = Column(String)
     points_required = Column(Integer, default=10)
     user_id = Column(Integer, ForeignKey("users.id"))
-    status = Column(String, default="active")  # active, completed, cancelled
+    status = Column(String, default="active")
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Event(Base):
     __tablename__ = "events"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
@@ -67,20 +70,21 @@ class Event(Base):
 
 class RSVP(Base):
     __tablename__ = "rsvps"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     event_id = Column(Integer, ForeignKey("events.id"))
     user_id = Column(Integer, ForeignKey("users.id"))
-    status = Column(String, default="going")  # going, not_going, maybe
+    status = Column(String, default="going")
     created_at = Column(DateTime, default=datetime.utcnow)
-
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
-    action = Column(String)  # CREATE, UPDATE, DELETE, ASSIGN, RSVP
+    action = Column(String)
     table_name = Column(String)
     record_id = Column(Integer)
     old_value = Column(JSON, nullable=True)
@@ -90,26 +94,29 @@ class AuditLog(Base):
 
 class SkillTransaction(Base):
     __tablename__ = "skill_transactions"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     skill_id = Column(Integer, ForeignKey("skills.id"))
     from_user_id = Column(Integer, ForeignKey("users.id"))
     to_user_id = Column(Integer, ForeignKey("users.id"))
     points = Column(Integer)
-    status = Column(String, default="pending")  # pending, completed, rejected
+    status = Column(String, default="pending")
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class ClubMember(Base):
     __tablename__ = "club_members"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     club_id = Column(Integer, ForeignKey("clubs.id"))
     user_id = Column(Integer, ForeignKey("users.id"))
-    role = Column(String, default="member")  # 'lead', 'member'
+    role = Column(String, default="member")
     joined_at = Column(DateTime, default=datetime.utcnow)
 
 class SkillCategory(Base):
     __tablename__ = "skill_categories"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)
@@ -125,23 +132,14 @@ skill_tags = Table(
 
 class Tag(Base):
     __tablename__ = "tags"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, unique=True, nullable=False)
 
-# Club Members (for adding members)
-class ClubMember(Base):
-    __tablename__ = "club_members"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    club_id = Column(Integer, ForeignKey("clubs.id"))
-    user_id = Column(Integer, ForeignKey("users.id"))
-    role = Column(String, default="member")  # 'member', 'lead'
-    joined_at = Column(DateTime, default=datetime.utcnow)
-
-# Task Comments
 class TaskComment(Base):
     __tablename__ = "task_comments"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     task_id = Column(Integer, ForeignKey("tasks.id"))
@@ -150,9 +148,9 @@ class TaskComment(Base):
     attachment_url = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-# Event Reminders
 class EventReminder(Base):
     __tablename__ = "event_reminders"
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     event_id = Column(Integer, ForeignKey("events.id"))
