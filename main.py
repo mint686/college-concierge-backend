@@ -15,6 +15,16 @@ from models import Base
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
 
+# Ensure ClubMember table exists (for existing databases)
+try:
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    if 'club_members' not in inspector.get_table_names():
+        ClubMember.__table__.create(engine)
+        print("Created club_members table")
+except Exception as e:
+    print(f"Note: {e}")
+
 # ========== CREATE FASTAPI APP ==========
 app = FastAPI(title="College Concierge API")
 
