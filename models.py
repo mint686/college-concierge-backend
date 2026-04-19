@@ -111,7 +111,20 @@ class ClubMember(Base):
     id = Column(Integer, primary_key=True, index=True)
     club_id = Column(Integer, ForeignKey("clubs.id"))
     user_id = Column(Integer, ForeignKey("users.id"))
+<<<<<<< HEAD
     role = Column(String, default="member")
+=======
+    role = Column(String, default="member")  # member, lead
+    joined_at = Column(DateTime, default=datetime.utcnow)
+
+class ClubMember(Base):
+    __tablename__ = "club_members"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    club_id = Column(Integer, ForeignKey("clubs.id"))
+    user_id = Column(Integer, ForeignKey("users.id"))
+    role = Column(String, default="member")  # 'lead', 'member'
+>>>>>>> 436e846150fd97068ba6e326d9698651d7e48c78
     joined_at = Column(DateTime, default=datetime.utcnow)
 
 class SkillCategory(Base):
