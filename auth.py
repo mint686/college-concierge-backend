@@ -9,7 +9,7 @@ from database import get_db
 from models import User, Club
 
 # Get secret key from environment variable
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-this-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY", "oKPwysHcGzMcTtO_45uvTaUy9x5akrIy0lNqfS3IvCQ")  # Use a strong secret key in production
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 

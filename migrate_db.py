@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Your Render PostgreSQL connection string
-DATABASE_URL = "postgresql://mint:XaF4tsWwF1gb5RjDGneEoMFg6QWlJEHC@dpg-d7fnoe9f9bms73ekqgsg-a.singapore-postgres.render.com/college_concierge"
+DATABASE_URL = "postgresql://postgres:Runya%40686@localhost:5432/college_concierge"
 
 def run_migration():
     """Create club_members table"""

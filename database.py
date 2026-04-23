@@ -4,7 +4,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
 # Get database URL from environment variable (Render provides this)
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://mint:XaF4tsWwF1gb5RjDGneEoMFg6QWlJEHC@dpg-d7fnoe9f9bms73ekqgsg-a.singapore-postgres.render.com/college_concierge")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://avnadmin:<redacted>@pg-3dc8b3c-collegeconcierge.c.aivencloud.com:27607/defaultdb?sslmode=require")
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
