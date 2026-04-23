@@ -3,8 +3,11 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# Get database URL from environment variable (Render provides this)
-DATABASE_URL = os.getenv("postgresql://postgres:HEFcxuJEsEjmNmMTQhndmNqFLXjJbzqM@hopper.proxy.rlwy.net:54778/railway")
+# Get database URL from environment variable (Railway injects this automatically)
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise Exception("DATABASE_URL environment variable not set")
 
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
