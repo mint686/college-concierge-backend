@@ -13,7 +13,7 @@ class User(Base):
     name = Column(String, nullable=False)
     password = Column(String, nullable=False)
     role = Column(String, default="student")
-    points = Column(Integer, default=0)
+    points = Column(Integer, default=100)
     college_verified = Column(Boolean, default=False)
     device_token = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
