@@ -2,7 +2,7 @@ import psycopg2
 import os
 
 # Your Render database connection details (from Render dashboard)
-DATABASE_URL = "postgresql://mint:XaF4tsWwF1gb5RjDGneEoMFg6QWlJEHC@dpg-d7fnoe9f9bms73ekqgsg-a.singapore-postgres.render.com/college_concierge"
+DATABASE_URL = "postgresql://postgres:Runya%40686@localhost:5432/college_concierge"
 def run_migration():
     try:
         # Connect to database
@@ -24,6 +24,20 @@ def run_migration():
         # Add club_id to users table
         cur.execute("""
             ALTER TABLE users ADD COLUMN IF NOT EXISTS club_id INTEGER REFERENCES clubs(id)
+        """)
+
+        # Add missing skill transaction confirmation columns
+        cur.execute("""
+            ALTER TABLE skill_transactions
+            ADD COLUMN IF NOT EXISTS learner_confirmed BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS teacher_confirmed BOOLEAN DEFAULT FALSE,
+            ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP NULL
+        """)
+
+        # Add missing max_rsvps column to events table
+        cur.execute("""
+            ALTER TABLE events
+            ADD COLUMN IF NOT EXISTS max_rsvps INTEGER NULL
         """)
         
         print("✅ Database migration completed successfully!")

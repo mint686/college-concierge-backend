@@ -66,6 +66,7 @@ class Event(Base):
     event_date = Column(DateTime)
     club_id = Column(Integer, ForeignKey("clubs.id"))
     created_by = Column(Integer, ForeignKey("users.id"))
+    max_rsvps = Column(Integer, nullable=True)  # NULL means unlimited
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class RSVP(Base):
@@ -102,6 +103,9 @@ class SkillTransaction(Base):
     to_user_id = Column(Integer, ForeignKey("users.id"))
     points = Column(Integer)
     status = Column(String, default="pending")
+    learner_confirmed = Column(Boolean, default=False)
+    teacher_confirmed = Column(Boolean, default=False)
+    completed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class ClubMember(Base):

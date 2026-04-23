@@ -77,6 +77,7 @@ class SkillResponse(BaseModel):
     points_required: int
     user_id: int
     user_name: str
+    user_email: str
     status: str
     created_at: datetime
 
@@ -86,6 +87,24 @@ class SkillRequestModel(BaseModel):
 class SkillApproveModel(BaseModel):
     transaction_id: int
 
+class SkillConfirmModel(BaseModel):
+    transaction_id: int
+
+class SkillTransactionResponse(BaseModel):
+    id: int
+    skill_title: str
+    points: int
+    status: str
+    other_user_name: str
+    other_user_email: Optional[str] = None
+    other_user_role: str
+    learner_confirmed: bool
+    teacher_confirmed: bool
+    needs_action: bool
+    action_type: Optional[str]
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
 # Event Models
 class EventCreate(BaseModel):
     title: str
@@ -93,6 +112,7 @@ class EventCreate(BaseModel):
     venue: str
     event_date: datetime
     club_id: Optional[int] = None
+    max_rsvps: Optional[int] = None
 
 class EventResponse(BaseModel):
     id: int
@@ -105,19 +125,22 @@ class EventResponse(BaseModel):
     created_by: int
     organizer_name: str
     rsvp_count: int
+    max_rsvps: Optional[int]
+    remaining_seats: Optional[int]
     user_rsvp_status: Optional[str]
 
 # Club & Task Models
 class ClubCreate(BaseModel):
     name: str
     description: Optional[str] = None
+    lead_id: Optional[int] = None
 
 class ClubResponse(BaseModel):
     id: int
     name: str
     description: Optional[str]
-    lead_id: int
-    lead_name: str
+    lead_id: Optional[int]
+    lead_name: Optional[str]
     created_at: datetime
 
 class TaskCreate(BaseModel):
@@ -231,6 +254,7 @@ def get_skills(
             "points_required": skill.points_required,
             "user_id": skill.user_id,
             "user_name": user.name if user else "Unknown",
+            "user_email": user.email if user else "",
             "status": skill.status,
             "created_at": skill.created_at
         })
@@ -263,6 +287,7 @@ def create_skill(
         "points_required": new_skill.points_required,
         "user_id": new_skill.user_id,
         "user_name": current_user.name,
+        "user_email": current_user.email,
         "status": new_skill.status,
         "created_at": new_skill.created_at
     }
@@ -308,40 +333,6 @@ def request_skill(
     
     return {"message": "Request sent", "transaction_id": transaction.id}
 
-@app.post("/skills/approve")
-def approve_skill(
-    approve_data: SkillApproveModel,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    transaction = db.query(SkillTransaction).filter(
-        SkillTransaction.id == approve_data.transaction_id
-    ).first()
-    
-    if not transaction:
-        raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    skill = db.query(Skill).filter(Skill.id == transaction.skill_id).first()
-    if skill.user_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
-    if transaction.status != "pending":
-        raise HTTPException(status_code=400, detail="Transaction already processed")
-    
-    from_user = db.query(User).filter(User.id == transaction.from_user_id).first()
-    to_user = db.query(User).filter(User.id == transaction.to_user_id).first()
-    
-    from_user.points -= transaction.points
-    to_user.points += transaction.points
-    transaction.status = "completed"
-    
-    if skill.skill_type == "offering":
-        skill.status = "completed"
-    
-    db.commit()
-    
-    return {"message": "Skill exchange completed", "points_deducted": transaction.points}
-
 @app.get("/skills/my")
 def get_my_skills(
     current_user: User = Depends(get_current_user),
@@ -355,21 +346,209 @@ def get_pending_requests(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    transactions = db.query(SkillTransaction).join(Skill).filter(
-        Skill.user_id == current_user.id,
-        SkillTransaction.status == "pending"
+    try:
+        # Get all transactions where the skill owner is the current user and status is pending
+        result = []
+        
+        # Get all pending transactions
+        all_txns = db.query(SkillTransaction).filter(
+            SkillTransaction.status == "pending"
+        ).all()
+        
+        for txn in all_txns:
+            skill = db.query(Skill).filter(Skill.id == txn.skill_id).first()
+            if skill and skill.user_id == current_user.id:
+                requester = db.query(User).filter(User.id == txn.from_user_id).first()
+                if requester:
+                    result.append({
+                        "transaction_id": txn.id,
+                        "skill_title": skill.title,
+                        "requester_name": requester.name,
+                        "requester_email": requester.email,
+                        "points": txn.points,
+                        "requested_at": txn.created_at
+                    })
+        
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ========== TWO-PARTY CONFIRMATION SKILL EXCHANGE ==========
+@app.post("/skills/approve")
+def approve_skill(
+    approve_data: SkillApproveModel,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Owner approves the request (NO points transfer yet)"""
+    
+    transaction = db.query(SkillTransaction).filter(
+        SkillTransaction.id == approve_data.transaction_id
+    ).first()
+    
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    skill = db.query(Skill).filter(Skill.id == transaction.skill_id).first()
+    if not skill:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    
+    # Only skill owner can approve
+    if skill.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    if transaction.status != "pending":
+        raise HTTPException(status_code=400, detail="Transaction already processed")
+    
+    transaction.status = "approved"
+    transaction.teacher_confirmed = True
+    db.commit()
+
+    return {
+        "message": "Request approved. Learner can now confirm completion.",
+        "contact_email": current_user.email
+    }
+
+@app.post("/skills/confirm")
+def confirm_skill_completion(
+    confirm_data: SkillConfirmModel,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    transaction = db.query(SkillTransaction).filter(SkillTransaction.id == confirm_data.transaction_id).first()
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    # Only requester (learner) can confirm
+    if current_user.id != transaction.from_user_id:
+        raise HTTPException(status_code=403, detail="Only the learner can confirm completion")
+    
+    if transaction.status != "approved":
+        raise HTTPException(status_code=400, detail="Transaction not in approved state")
+    
+    if transaction.learner_confirmed:
+        raise HTTPException(status_code=400, detail="Already confirmed")
+    
+    from_user = db.query(User).filter(User.id == transaction.from_user_id).first()
+    to_user = db.query(User).filter(User.id == transaction.to_user_id).first()
+    
+    if from_user.points < transaction.points:
+        raise HTTPException(status_code=400, detail="Insufficient points")
+    
+    from_user.points -= transaction.points
+    to_user.points += transaction.points
+    
+    transaction.learner_confirmed = True
+    transaction.status = "completed"
+    transaction.completed_at = datetime.utcnow()
+    
+    skill = db.query(Skill).filter(Skill.id == transaction.skill_id).first()
+    if skill:
+        skill.status = "completed"
+    
+    db.commit()
+    
+    return {"message": "Skill exchange completed! Points transferred.", "completed": True}
+
+@app.get("/skills/my-transactions", response_model=List[SkillTransactionResponse])
+def get_my_transactions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all transactions for current user (as learner or teacher)"""
+    
+    transactions = db.query(SkillTransaction).filter(
+        (SkillTransaction.from_user_id == current_user.id) |
+        (SkillTransaction.to_user_id == current_user.id)
     ).all()
     
     result = []
     for txn in transactions:
         skill = db.query(Skill).filter(Skill.id == txn.skill_id).first()
-        requester = db.query(User).filter(User.id == txn.from_user_id).first()
+        other_user_id = txn.to_user_id if current_user.id == txn.from_user_id else txn.from_user_id
+        other_user = db.query(User).filter(User.id == other_user_id).first()
+        
+        # Determine what action is needed from current user
+        needs_action = False
+        action_type = None
+        
+        if txn.status == "approved":
+            if current_user.id == txn.from_user_id and not txn.learner_confirmed:
+                needs_action = True
+                action_type = "confirm_learning"
+            elif current_user.id == txn.to_user_id and not txn.teacher_confirmed:
+                needs_action = True
+                action_type = "confirm_teaching"
+        
         result.append({
-            "transaction_id": txn.id,
-            "skill_title": skill.title,
-            "requester_name": requester.name,
+            "id": txn.id,
+            "skill_title": skill.title if skill else "Unknown",
             "points": txn.points,
-            "requested_at": txn.created_at
+            "status": txn.status,
+            "other_user_name": other_user.name if other_user else "Unknown",
+            "other_user_email": other_user.email if other_user else None,
+            "other_user_role": "Learner" if current_user.id == txn.to_user_id else "Teacher",
+            "learner_confirmed": txn.learner_confirmed,
+            "teacher_confirmed": txn.teacher_confirmed,
+            "needs_action": needs_action,
+            "action_type": action_type,
+            "created_at": txn.created_at,
+            "completed_at": txn.completed_at
+        })
+    
+    return result
+
+@app.get("/skills/transaction/{transaction_id}")
+def get_transaction_details(
+    transaction_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    transaction = db.query(SkillTransaction).filter(SkillTransaction.id == transaction_id).first()
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    if current_user.id not in [transaction.from_user_id, transaction.to_user_id]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    
+    skill = db.query(Skill).filter(Skill.id == transaction.skill_id).first()
+    owner = db.query(User).filter(User.id == transaction.to_user_id).first()
+    requester = db.query(User).filter(User.id == transaction.from_user_id).first()
+    
+    return {
+        "id": transaction.id,
+        "skill_title": skill.title,
+        "points": transaction.points,
+        "status": transaction.status,
+        "owner_name": owner.name,
+        "owner_email": owner.email,  # Contact info
+        "requester_name": requester.name,
+        "requester_confirmed": transaction.learner_confirmed,
+        "created_at": transaction.created_at
+    }
+
+@app.get("/skills/my-approved-requests")
+def get_my_approved_requests(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all approved skill requests where current user is the learner"""
+    transactions = db.query(SkillTransaction).filter(
+        SkillTransaction.from_user_id == current_user.id,
+        SkillTransaction.status == "approved",
+        SkillTransaction.learner_confirmed == False
+    ).all()
+    
+    result = []
+    for txn in transactions:
+        skill = db.query(Skill).filter(Skill.id == txn.skill_id).first()
+        owner = db.query(User).filter(User.id == txn.to_user_id).first()
+        result.append({
+            "id": txn.id,
+            "skill_title": skill.title,
+            "points": txn.points,
+            "owner_name": owner.name,
+            "owner_email": owner.email,
+            "created_at": txn.created_at
         })
     
     return result
@@ -408,6 +587,10 @@ def get_events(
             club = db.query(Club).filter(Club.id == event.club_id).first()
             club_name = club.name if club else None
         
+        remaining_seats = None
+        if event.max_rsvps:
+            remaining_seats = max(0, event.max_rsvps - rsvp_count)
+        
         result.append({
             "id": event.id,
             "title": event.title,
@@ -419,6 +602,8 @@ def get_events(
             "created_by": event.created_by,
             "organizer_name": organizer.name if organizer else "Unknown",
             "rsvp_count": rsvp_count,
+            "max_rsvps": event.max_rsvps,
+            "remaining_seats": remaining_seats,
             "user_rsvp_status": user_rsvp.status if user_rsvp else None
         })
     
@@ -443,14 +628,34 @@ def create_event(
         venue=event_data.venue,
         event_date=event_data.event_date,
         club_id=event_data.club_id,
-        created_by=current_user.id
+        created_by=current_user.id,
+        max_rsvps=event_data.max_rsvps
     )
     
     db.add(new_event)
     db.commit()
     db.refresh(new_event)
     
-    return new_event
+    organizer = db.query(User).filter(User.id == current_user.id).first()
+    remaining_seats = None
+    if new_event.max_rsvps:
+        remaining_seats = new_event.max_rsvps
+    
+    return {
+        "id": new_event.id,
+        "title": new_event.title,
+        "description": new_event.description,
+        "venue": new_event.venue,
+        "event_date": new_event.event_date,
+        "club_id": new_event.club_id,
+        "club_name": None,
+        "created_by": new_event.created_by,
+        "organizer_name": organizer.name if organizer else "Unknown",
+        "rsvp_count": 0,
+        "max_rsvps": new_event.max_rsvps,
+        "remaining_seats": remaining_seats,
+        "user_rsvp_status": None
+    }
 
 @app.post("/events/{event_id}/rsvp")
 def rsvp_event(
@@ -468,10 +673,21 @@ def rsvp_event(
         RSVP.user_id == current_user.id
     ).first()
     
-    if existing:
-        existing.status = status
-        message = f"RSVP updated to {status}"
-    else:
+    # Check if user is already RSVP'd (updating existing RSVP doesn't count as new)
+    if not existing:
+        # Count current RSVPs with "going" status
+        current_rsvp_count = db.query(RSVP).filter(
+            RSVP.event_id == event_id,
+            RSVP.status == "going"
+        ).count()
+        
+        # Check if event has max_rsvps limit and if it's exceeded
+        if event.max_rsvps and current_rsvp_count >= event.max_rsvps:
+            raise HTTPException(
+                status_code=400, 
+                detail="Event is full! No more seats available."
+            )
+        
         new_rsvp = RSVP(
             event_id=event_id,
             user_id=current_user.id,
@@ -479,6 +695,9 @@ def rsvp_event(
         )
         db.add(new_rsvp)
         message = f"RSVP'd as {status}"
+    else:
+        existing.status = status
+        message = f"RSVP updated to {status}"
     
     db.commit()
     
@@ -499,11 +718,23 @@ def get_my_events(
     
     result = []
     for event in events:
+        rsvp_count = db.query(RSVP).filter(
+            RSVP.event_id == event.id,
+            RSVP.status == "going"
+        ).count()
+        
+        remaining_seats = None
+        if event.max_rsvps:
+            remaining_seats = max(0, event.max_rsvps - rsvp_count)
+        
         result.append({
             "id": event.id,
             "title": event.title,
             "venue": event.venue,
-            "event_date": event.event_date
+            "event_date": event.event_date,
+            "max_rsvps": event.max_rsvps,
+            "remaining_seats": remaining_seats,
+            "rsvp_count": rsvp_count
         })
     
     return result
@@ -539,13 +770,13 @@ def get_clubs(
     
     result = []
     for club in clubs:
-        lead = db.query(User).filter(User.id == club.lead_id).first()
+        lead = db.query(User).filter(User.id == club.lead_id).first() if club.lead_id else None
         result.append({
             "id": club.id,
             "name": club.name,
             "description": club.description,
             "lead_id": club.lead_id,
-            "lead_name": lead.name if lead else "Unknown",
+            "lead_name": lead.name if lead else None,
             "created_at": club.created_at
         })
     return result
@@ -560,10 +791,18 @@ def create_club(
     if existing:
         raise HTTPException(status_code=400, detail="Club name already exists")
     
+    # Determine the lead - use provided lead_id or default to current user
+    lead_id = club_data.lead_id if club_data.lead_id else current_user.id
+    
+    # Verify the lead exists
+    lead_user = db.query(User).filter(User.id == lead_id).first()
+    if not lead_user:
+        raise HTTPException(status_code=400, detail="Selected lead user does not exist")
+    
     new_club = Club(
         name=club_data.name,
         description=club_data.description,
-        lead_id=current_user.id
+        lead_id=lead_id
     )
     
     db.add(new_club)
@@ -575,7 +814,7 @@ def create_club(
         "name": new_club.name,
         "description": new_club.description,
         "lead_id": new_club.lead_id,
-        "lead_name": current_user.name,
+        "lead_name": lead_user.name,
         "created_at": new_club.created_at
     }
 
@@ -607,14 +846,14 @@ def join_club(
     
     return {"message": f"Join request sent to {club.name}"}
 
+
 # ========== CLUB MEMBER MANAGEMENT ==========
 @app.post("/clubs/{club_id}/members/add")
 def add_club_member(
     club_id: int,
     email: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Add a member to club (Club Lead only)"""
     
     club = db.query(Club).filter(Club.id == club_id).first()
@@ -639,8 +878,6 @@ def add_club_member(
     new_member = ClubMember(
         club_id=club_id,
         user_id=user_to_add.id,
-        name=user_to_add.name,  # Store name directly
-        email=user_to_add.email,  # Store email directly
         role="member"
     )
     
@@ -653,8 +890,7 @@ def add_club_member(
 def get_club_members(
     club_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Get all members of a club (Club Lead only)"""
     
     club = db.query(Club).filter(Club.id == club_id).first()
@@ -669,13 +905,15 @@ def get_club_members(
     result = []
     
     for member in members:
-        result.append({
-            "id": member.user_id,  # Use stored user_id
-            "name": member.name,   # Use stored name
-            "email": member.email, # Use stored email
-            "role": member.role,
-            "joined_at": member.joined_at
-        })
+        user = db.query(User).filter(User.id == member.user_id).first()
+        if user:
+            result.append({
+                "id": member.user_id,
+                "name": user.name,
+                "email": user.email,
+                "role": member.role,
+                "joined_at": member.joined_at
+            })
     
     lead = db.query(User).filter(User.id == club.lead_id).first()
     if lead:
@@ -695,35 +933,31 @@ def get_club_members(
 def get_assignable_members(
     club_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Get club members available for task assignment (Club Lead or Admin only)"""
     
     club = db.query(Club).filter(Club.id == club_id).first()
     if not club:
         raise HTTPException(status_code=404, detail="Club not found")
     
-    # Only club lead or admin can assign tasks
     if club.lead_id != current_user.id and current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Only club lead can assign tasks")
     
-    # Get all club members
     members = db.query(ClubMember).filter(ClubMember.club_id == club_id).all()
     
     result = []
     
-    # Add all members
     for member in members:
-        result.append({
-            "id": member.user_id,
-            "name": member.name,   # Use stored name
-            "email": member.email  # Use stored email
-        })
+        user = db.query(User).filter(User.id == member.user_id).first()
+        if user:
+            result.append({
+                "id": member.user_id,
+                "name": user.name,
+                "email": user.email
+            })
     
-    # Add club lead
     lead = db.query(User).filter(User.id == club.lead_id).first()
     if lead:
-        # Check if lead is already in the list
         lead_already_included = any(m.get('id') == lead.id for m in result)
         if not lead_already_included:
             result.insert(0, {
@@ -737,8 +971,7 @@ def get_assignable_members(
 @app.get("/clubs/my")
 def get_my_clubs(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Get clubs where user is lead or member"""
     
     lead_clubs = db.query(Club).filter(Club.lead_id == current_user.id).all()
@@ -764,8 +997,7 @@ def get_my_clubs(
 @app.get("/tasks", response_model=List[TaskResponse])
 def get_my_tasks(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     tasks = db.query(Task).filter(Task.assigned_to == current_user.id).all()
     
     result = []
@@ -795,8 +1027,7 @@ def get_my_tasks(
 def create_task(
     task_data: TaskCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     club = db.query(Club).filter(Club.id == task_data.club_id).first()
     if not club:
         raise HTTPException(status_code=404, detail="Club not found")
@@ -852,8 +1083,7 @@ def update_task_status(
     task_id: int,
     status: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -889,8 +1119,7 @@ def update_task_status(
 @app.get("/tasks/pending/count")
 def get_pending_tasks_count(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     count = db.query(Task).filter(
         Task.assigned_to == current_user.id,
         Task.status == "pending"
@@ -902,8 +1131,7 @@ def get_pending_tasks_count(
 def delete_task(
     task_id: int,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Delete a task (only if status is 'pending')"""
     
     task = db.query(Task).filter(Task.id == task_id).first()
@@ -929,8 +1157,7 @@ def update_task(
     task_id: int,
     task_data: TaskCreate,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Update a task (only if status is 'pending')"""
     
     task = db.query(Task).filter(Task.id == task_id).first()
@@ -956,57 +1183,11 @@ def update_task(
     
     return task
 
-@app.post("/tasks/{task_id}/comments")
-def add_task_comment(
-    task_id: int,
-    comment: str,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Add comment to a task"""
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    
-    new_comment = TaskComment(
-        task_id=task_id,
-        user_id=current_user.id,
-        comment=comment
-    )
-    
-    db.add(new_comment)
-    db.commit()
-    db.refresh(new_comment)
-    
-    return new_comment
-
-@app.get("/tasks/{task_id}/comments")
-def get_task_comments(
-    task_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Get all comments for a task"""
-    comments = db.query(TaskComment).filter(TaskComment.task_id == task_id).all()
-    result = []
-    for comment in comments:
-        user = db.query(User).filter(User.id == comment.user_id).first()
-        result.append({
-            "id": comment.id,
-            "comment": comment.comment,
-            "name": user.name if user else "Unknown",
-            "created_at": comment.created_at,
-            "attachment_url": comment.attachment_url
-        })
-    
-    return result
-
 # ========== USER CLUBS ENDPOINT ==========
 @app.get("/users/my-clubs")
 def get_my_clubs(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Get clubs where user is a member"""
     lead_clubs = db.query(Club).filter(Club.lead_id == current_user.id).all()
     
@@ -1031,8 +1212,7 @@ def get_my_clubs(
 @app.get("/skill-categories")
 def get_skill_categories(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Get all skill categories"""
     categories = db.query(SkillCategory).all()
     return [{"id": c.id, "name": c.name, "icon": c.icon} for c in categories]
@@ -1044,8 +1224,7 @@ def search_skills(
     tag: Optional[str] = None,
     skill_type: Optional[str] = None,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Search skills with filters"""
     query = db.query(Skill).filter(Skill.status == "active")
     
@@ -1065,8 +1244,7 @@ def search_skills(
 @app.get("/admin/users")
 def get_all_users(
     current_user: User = Depends(require_role("admin")),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Get all users (Admin only)"""
     users = db.query(User).all()
     return [
@@ -1086,8 +1264,7 @@ def update_user_role(
     new_role: str,
     club_id: Optional[int] = None,
     current_user: User = Depends(require_role("admin")),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Update a user's role (Admin only)"""
     
     if new_role not in ["student", "club_lead", "admin"]:
@@ -1123,8 +1300,7 @@ def update_user_role(
 def delete_user(
     user_id: int,
     current_user: User = Depends(require_role("admin")),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Delete a user (Admin only)"""
     
     if user_id == current_user.id:
@@ -1136,25 +1312,60 @@ def delete_user(
     
     # Remove user from all club memberships
     db.query(ClubMember).filter(ClubMember.user_id == user_id).delete()
-
+    
     # Handle clubs where user is lead
     lead_clubs = db.query(Club).filter(Club.lead_id == user_id).all()
     for club in lead_clubs:
-        # You might want to assign a new lead or handle this differently
-        # For now, we'll just remove the lead_id
         club.lead_id = None
-
+    
     db.delete(user)
     db.commit()
     
     return {"message": f"User {user.email} deleted successfully"}
 
+@app.post("/admin/clubs", response_model=ClubResponse)
+def create_club_admin(
+    club_data: ClubCreate,
+    current_user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db)
+):
+    """Create a club as admin (can set custom lead or defaults to admin user)"""
+    existing = db.query(Club).filter(Club.name == club_data.name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Club name already exists")
+    
+    # Determine the lead - use provided lead_id or default to admin user
+    lead_id = club_data.lead_id if club_data.lead_id else current_user.id
+    
+    # Verify the lead exists
+    lead_user = db.query(User).filter(User.id == lead_id).first()
+    if not lead_user:
+        raise HTTPException(status_code=400, detail="Selected lead user does not exist")
+    
+    new_club = Club(
+        name=club_data.name,
+        description=club_data.description,
+        lead_id=lead_id
+    )
+    
+    db.add(new_club)
+    db.commit()
+    db.refresh(new_club)
+    
+    return {
+        "id": new_club.id,
+        "name": new_club.name,
+        "description": new_club.description,
+        "lead_id": new_club.lead_id,
+        "lead_name": lead_user.name,
+        "created_at": new_club.created_at
+    }
+
 @app.delete("/admin/clubs/{club_id}")
 def delete_club(
     club_id: int,
     current_user: User = Depends(require_role("admin")),
-    db: Session = Depends(get_db)
-):
+    db: Session = Depends(get_db)):
     """Delete a club (Admin only)"""
     club = db.query(Club).filter(Club.id == club_id).first()
     if not club:
